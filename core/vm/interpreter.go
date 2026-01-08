@@ -17,8 +17,10 @@
 package vm
 
 import (
+	"fmt"
 	"hash"
 	"sync/atomic"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
@@ -208,6 +210,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 	// parent context.
 	steps := 0
 	for {
+		t1 := time.Now()
 		steps++
 		if steps%1000 == 0 && atomic.LoadInt32(&in.evm.abort) != 0 {
 			break
@@ -282,9 +285,14 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			in.cfg.Tracer.CaptureState(in.evm, pc, op, gasCopy, cost, mem, stack, returns, in.returnData, contract, in.evm.depth, err)
 			logged = true
 		}
+		t2 := time.Now()
 
 		// execute the operation
 		res, err = operation.execute(&pc, in, callContext)
+		t3 := time.Now()
+		if t3.Sub(t1).Milliseconds() > 30 {
+			fmt.Println("slow opcode execution", "op", op, "exeTimeMs", t3.Sub(t2).Milliseconds(), "totalTimeMs", t3.Sub(t1).Milliseconds())
+		}
 		// if the operation clears the return data (e.g. it has returning data)
 		// set the last return to the result of the operation.
 		if operation.returns {
