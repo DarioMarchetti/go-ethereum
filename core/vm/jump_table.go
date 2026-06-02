@@ -58,15 +58,38 @@ var (
 	constantinopleInstructionSet   = newConstantinopleInstructionSet()
 	istanbulInstructionSet         = newIstanbulInstructionSet()
 	yoloV1InstructionSet           = newYoloV1InstructionSet()
+	pragueForkInstructionSet       = newPragueForkInstructionSet()
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
 type JumpTable [256]operation
 
+func newPragueForkInstructionSet() JumpTable {
+	instructionSet := newYoloV1InstructionSet()
+
+	enable3198(&instructionSet) // BASEFEE              london
+	enable3855(&instructionSet) // PUSH0                shanghai
+	enable4844(&instructionSet) // BLOBHASH             cancun
+	enable7516(&instructionSet) // BLOBBASEFEE          cancun
+	enable5656(&instructionSet) // MCOPY                cancun
+	enable1153(&instructionSet) // TLOAD, TSTORE        cancun
+
+	instructionSet[PREVRANDAO] = operation{ // merge
+		execute:     opRandom,
+		constantGas: GasQuickStep,
+		minStack:    minStack(0, 1),
+		maxStack:    maxStack(0, 1),
+		valid:       true,
+	}
+
+	return instructionSet
+
+}
+
 func newYoloV1InstructionSet() JumpTable {
 	instructionSet := newIstanbulInstructionSet()
 
-	enable2315(&instructionSet) // Subroutines - https://eips.ethereum.org/EIPS/eip-2315
+	// enable2315(&instructionSet) // Subroutines - https://eips.ethereum.org/EIPS/eip-2315
 
 	return instructionSet
 }

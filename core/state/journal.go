@@ -84,6 +84,14 @@ func (j *journal) length() int {
 	return len(j.entries)
 }
 
+func (j *journal) transientStateChange(addr common.Address, key, prev common.Hash) {
+	j.append(transientStorageChange{
+		account:  addr,
+		key:      key,
+		prevalue: prev,
+	})
+}
+
 type (
 	// Changes to the account trie.
 	createObjectChange struct {
@@ -129,6 +137,12 @@ type (
 	}
 	touchChange struct {
 		account *common.Address
+	}
+
+	// Changes to transient storage
+	transientStorageChange struct {
+		account       common.Address
+		key, prevalue common.Hash
 	}
 )
 
@@ -232,5 +246,13 @@ func (ch addPreimageChange) revert(s *StateDB) {
 }
 
 func (ch addPreimageChange) dirtied() *common.Address {
+	return nil
+}
+
+func (ch transientStorageChange) revert(s *StateDB) {
+	s.setTransientState(ch.account, ch.key, ch.prevalue)
+}
+
+func (ch transientStorageChange) dirtied() *common.Address {
 	return nil
 }

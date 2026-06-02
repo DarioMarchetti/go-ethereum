@@ -476,6 +476,17 @@ func opExtCodeSize(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx
 	return nil, nil
 }
 
+func opRandom(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
+	// EIP-4399: PREVRANDAO returns the consensus-injected randomness when
+	// available; falls back to DIFFICULTY for legacy code paths.
+	if interpreter.evm.Random != nil {
+		callContext.stack.push(interpreter.intPool.get().SetBytes(interpreter.evm.Random.Bytes()))
+		return nil, nil
+	}
+	callContext.stack.push(math.U256(interpreter.intPool.get().Set(interpreter.evm.Difficulty)))
+	return nil, nil
+}
+
 func opCodeSize(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
 	l := interpreter.intPool.get().SetInt64(int64(len(callContext.contract.Code)))
 	callContext.stack.push(l)
@@ -513,16 +524,21 @@ func opExtCodeCopy(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx
 // opExtCodeHash returns the code hash of a specified account.
 // There are several cases when the function is called, while we can relay everything
 // to `state.GetCodeHash` function to ensure the correctness.
-//   (1) Caller tries to get the code hash of a normal contract account, state
+//
+//	(1) Caller tries to get the code hash of a normal contract account, state
+//
 // should return the relative code hash and set it as the result.
 //
-//   (2) Caller tries to get the code hash of a non-existent account, state should
+//	(2) Caller tries to get the code hash of a non-existent account, state should
+//
 // return common.Hash{} and zero will be set as the result.
 //
-//   (3) Caller tries to get the code hash for an account without contract code,
+//	(3) Caller tries to get the code hash for an account without contract code,
+//
 // state should return emptyCodeHash(0xc5d246...) as the result.
 //
-//   (4) Caller tries to get the code hash of a precompiled account, the result
+//	(4) Caller tries to get the code hash of a precompiled account, the result
+//
 // should be zero or emptyCodeHash.
 //
 // It is worth noting that in order to avoid unnecessary create and clean,
@@ -531,10 +547,12 @@ func opExtCodeCopy(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx
 // If the precompile account is not transferred any amount on a private or
 // customized chain, the return value will be zero.
 //
-//   (5) Caller tries to get the code hash for an account which is marked as suicided
+//	(5) Caller tries to get the code hash for an account which is marked as suicided
+//
 // in the current transaction, the code hash of this account should be returned.
 //
-//   (6) Caller tries to get the code hash for an account which is marked as deleted,
+//	(6) Caller tries to get the code hash for an account which is marked as deleted,
+//
 // this account should be regarded as a non-existent account and zero should be returned.
 func opExtCodeHash(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
 	slot := callContext.stack.peek()
@@ -668,23 +686,23 @@ func opBeginSub(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) (
 	return nil, ErrInvalidSubroutineEntry
 }
 
-func opJumpSub(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
-	if len(callContext.rstack.data) >= 1023 {
-		return nil, ErrReturnStackExceeded
-	}
-	pos := callContext.stack.pop()
-	if !pos.IsUint64() {
-		return nil, ErrInvalidJump
-	}
-	posU64 := pos.Uint64()
-	if !callContext.contract.validJumpSubdest(posU64) {
-		return nil, ErrInvalidJump
-	}
-	callContext.rstack.push(*pc)
-	*pc = posU64 + 1
-	interpreter.intPool.put(pos)
-	return nil, nil
-}
+// func opJumpSub(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
+// 	if len(callContext.rstack.data) >= 1023 {
+// 		return nil, ErrReturnStackExceeded
+// 	}
+// 	pos := callContext.stack.pop()
+// 	if !pos.IsUint64() {
+// 		return nil, ErrInvalidJump
+// 	}
+// 	posU64 := pos.Uint64()
+// 	if !callContext.contract.validJumpSubdest(posU64) {
+// 		return nil, ErrInvalidJump
+// 	}
+// 	callContext.rstack.push(*pc)
+// 	*pc = posU64 + 1
+// 	interpreter.intPool.put(pos)
+// 	return nil, nil
+// }
 
 func opReturnSub(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
 	if len(callContext.rstack.data) == 0 {
@@ -905,7 +923,12 @@ func opSuicide(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([
 	balance := interpreter.evm.StateDB.GetBalance(callContext.contract.Address())
 	interpreter.evm.StateDB.AddBalance(common.BigToAddress(callContext.stack.pop()), balance)
 
-	interpreter.evm.StateDB.Suicide(callContext.contract.Address())
+	if interpreter.evm.chainRules.IsPragueFork {
+		// EIP-6780: only delete the account if it was created in this transaction.
+		interpreter.evm.StateDB.Selfdestruct6780(callContext.contract.Address())
+	} else {
+		interpreter.evm.StateDB.Suicide(callContext.contract.Address())
+	}
 	return nil, nil
 }
 

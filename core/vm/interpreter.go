@@ -101,6 +101,8 @@ func NewEVMInterpreter(evm *EVM, cfg Config) *EVMInterpreter {
 	if !cfg.JumpTable[STOP].valid {
 		var jt JumpTable
 		switch {
+		case evm.chainRules.IsPragueFork:
+			jt = pragueForkInstructionSet
 		case evm.chainRules.IsYoloV1:
 			jt = yoloV1InstructionSet
 		case evm.chainRules.IsIstanbul:

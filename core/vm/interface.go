@@ -64,6 +64,14 @@ type StateDB interface {
 	AddPreimage(common.Hash, []byte)
 
 	ForEachStorage(common.Address, func(common.Hash, common.Hash) bool) error
+
+	GetTransientState(common.Address, common.Hash) common.Hash
+	SetTransientState(common.Address, common.Hash, common.Hash)
+
+	// Selfdestruct6780 implements EIP-6780: only fully delete the account if it
+	// was created within the same transaction; otherwise just transfer balance
+	// (which is performed by the caller before invoking this method).
+	Selfdestruct6780(common.Address)
 }
 
 // CallContext provides a basic interface for the EVM calling conventions. The EVM

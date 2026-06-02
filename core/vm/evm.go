@@ -54,6 +54,9 @@ func run(evm *EVM, contract *Contract, input []byte, readOnly bool) ([]byte, err
 		if evm.chainRules.IsYoloV1 {
 			precompiles = PrecompiledContractsYoloV1
 		}
+		if evm.chainRules.IsPragueFork {
+			precompiles = PrecompiledContractsPragueFork
+		}
 		if p := precompiles[*contract.CodeAddr]; p != nil {
 			return RunPrecompiledContract(p, input, contract)
 		}
@@ -95,6 +98,10 @@ type Context struct {
 	BlockNumber *big.Int       // Provides information for NUMBER
 	Time        *big.Int       // Provides information for TIME
 	Difficulty  *big.Int       // Provides information for DIFFICULTY
+	// Random, if non-nil, supplies the value returned by the PREVRANDAO opcode
+	// (EIP-4399). Consensus layer is expected to inject a deterministic 32-byte
+	// entropy source (e.g. last-commit-hash) here when the Prague fork is active.
+	Random *common.Hash
 }
 
 // EVM is the Ethereum Virtual Machine base object and provides
@@ -397,6 +404,10 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	if evm.StateDB.GetNonce(address) != 0 || (contractHash != (common.Hash{}) && contractHash != emptyCodeHash) {
 		return nil, common.Address{}, 0, ErrContractAddressCollision
 	}
+	// EIP-3860: limit initcode size after Prague fork
+	if evm.chainRules.IsPragueFork && len(codeAndHash.code) > params.MaxInitCodeSize {
+		return nil, common.Address{}, gas, ErrMaxInitCodeSizeExceeded
+	}
 	// Create a new account on the state
 	snapshot := evm.StateDB.Snapshot()
 	evm.StateDB.CreateAccount(address)
@@ -420,6 +431,11 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	start := time.Now()
 
 	ret, err := run(evm, contract, nil, false)
+
+	// EIP-3541: reject deployed code starting with the 0xEF byte (Prague rule).
+	if err == nil && evm.chainRules.IsPragueFork && len(ret) >= 1 && ret[0] == 0xEF {
+		err = ErrInvalidCode
+	}
 
 	// check whether the max code size has been exceeded
 	maxCodeSizeExceeded := evm.chainRules.IsEIP158 && len(ret) > params.MaxCodeSize
