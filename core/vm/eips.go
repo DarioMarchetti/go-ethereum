@@ -256,3 +256,28 @@ func opMcopy(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]b
 	callContext.memory.Copy(dst.Uint64(), src.Uint64(), length.Uint64())
 	return nil, nil
 }
+
+// enable7939 enables EIP-7939 (CLZ — count leading zero bytes) — Osaka.
+// Opcode 0x1e: pops one 256-bit value and pushes the number of leading zero
+// bits (0..256). Constant gas cost: 5 (FastestStep, same as BYTE/SHL/SHR/SAR).
+func enable7939(jt *JumpTable) {
+jt[CLZ] = operation{
+execute:     opClz,
+constantGas: GasFastestStep,
+minStack:    minStack(1, 1),
+maxStack:    maxStack(1, 1),
+valid:       true,
+}
+}
+
+// opClz implements the CLZ opcode (EIP-7939). It counts the number of leading
+// zero *bits* in the top stack item (0 maps to 256).
+func opClz(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([]byte, error) {
+x := callContext.stack.peek()
+if x.Sign() == 0 {
+x.SetUint64(256)
+return nil, nil
+}
+x.SetUint64(uint64(256 - x.BitLen()))
+return nil, nil
+}

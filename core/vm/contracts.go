@@ -17,6 +17,8 @@
 package vm
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -106,7 +108,7 @@ var PrecompiledContractsPragueFork = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{2}):  &sha256hash{},
 	common.BytesToAddress([]byte{3}):  &ripemd160hash{},
 	common.BytesToAddress([]byte{4}):  &dataCopy{},
-	common.BytesToAddress([]byte{5}):  &bigModExp{},
+	common.BytesToAddress([]byte{5}):  &bigModExpOsaka{}, // EIP-7883 repricing
 	common.BytesToAddress([]byte{6}):  &bn256AddIstanbul{},
 	common.BytesToAddress([]byte{7}):  &bn256ScalarMulIstanbul{},
 	common.BytesToAddress([]byte{8}):  &bn256PairingIstanbul{},
@@ -120,6 +122,8 @@ var PrecompiledContractsPragueFork = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{16}): &bls12381Pairing{},
 	common.BytesToAddress([]byte{17}): &bls12381MapG1{},
 	common.BytesToAddress([]byte{18}): &bls12381MapG2{},
+	// EIP-7951 — P256VERIFY at address 0x0000…0100 (Osaka)
+	common.BytesToAddress([]byte{1, 0}): &p256Verify{},
 }
 
 // RunPrecompiledContract runs and evaluates the output of a precompiled contract.
@@ -969,4 +973,127 @@ func (c *bls12381MapG2) Run(input []byte) ([]byte, error) {
 
 	// Encode the G2 point to 256 bytes
 	return g.EncodePoint(r), nil
+}
+
+// bigModExpOsaka implements EIP-7883 — re-pricing of the ModExp precompile
+// applied at the Osaka fork. Behaviour (Run) is identical to bigModExp; only
+// the gas formula changes:
+//
+//   words           = ceil(max(baseLen, modLen) / 8)
+//   multComplexity  = 16                         if max(baseLen, modLen) <= 32
+//                     2 * words * words          otherwise
+//   gas             = max(500, multComplexity * max(adjExpLen, 1) / 3)
+type bigModExpOsaka struct{}
+
+var (
+osakaBig500 = big.NewInt(500)
+osakaBig3   = big.NewInt(3)
+)
+
+// RequiredGas returns the EIP-7883 priced gas for the ModExp precompile.
+func (c *bigModExpOsaka) RequiredGas(input []byte) uint64 {
+var (
+baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
+expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
+modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
+)
+if len(input) > 96 {
+input = input[96:]
+} else {
+input = input[:0]
+}
+var expHead *big.Int
+if big.NewInt(int64(len(input))).Cmp(baseLen) <= 0 {
+expHead = new(big.Int)
+} else {
+if expLen.Cmp(big32) > 0 {
+expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), 32))
+} else {
+expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), expLen.Uint64()))
+}
+}
+var msb int
+if bitlen := expHead.BitLen(); bitlen > 0 {
+msb = bitlen - 1
+}
+adjExpLen := new(big.Int)
+if expLen.Cmp(big32) > 0 {
+adjExpLen.Sub(expLen, big32)
+adjExpLen.Mul(big8, adjExpLen)
+}
+adjExpLen.Add(adjExpLen, big.NewInt(int64(msb)))
+
+maxLen := math.BigMax(modLen, baseLen)
+var multComplexity *big.Int
+if maxLen.Cmp(big32) <= 0 {
+multComplexity = big.NewInt(16)
+} else {
+// words = ceil(maxLen / 8)
+words := new(big.Int).Add(maxLen, big.NewInt(7))
+words.Div(words, big8)
+multComplexity = new(big.Int).Mul(words, words)
+multComplexity.Mul(multComplexity, big.NewInt(2))
+}
+
+gas := new(big.Int).Mul(multComplexity, math.BigMax(adjExpLen, big1))
+gas.Div(gas, osakaBig3)
+if gas.Cmp(osakaBig500) < 0 {
+gas.Set(osakaBig500)
+}
+if gas.BitLen() > 64 {
+return math.MaxUint64
+}
+return gas.Uint64()
+}
+
+// Run delegates to the standard bigModExp implementation; the algorithm did
+// not change, only the gas pricing did.
+func (c *bigModExpOsaka) Run(input []byte) ([]byte, error) {
+return (&bigModExp{}).Run(input)
+}
+
+// p256Verify implements EIP-7951 — secp256r1 (P-256) signature verification
+// precompile at address 0x0000…0100. Activated at the Osaka fork.
+//
+//   input  = msgHash(32) || r(32) || s(32) || qX(32) || qY(32)        // 160 bytes
+//   output = 32-byte big-endian "1"  on valid signature
+//            empty                  on any failure (malformed input,
+//                                   bad point, invalid signature)
+//   gas    = 6900  (constant, per EIP-7951)
+type p256Verify struct{}
+
+const p256VerifyGas uint64 = 6900
+
+func (c *p256Verify) RequiredGas(_ []byte) uint64 { return p256VerifyGas }
+
+func (c *p256Verify) Run(input []byte) ([]byte, error) {
+if len(input) != 160 {
+return nil, nil
+}
+hash := input[0:32]
+r := new(big.Int).SetBytes(input[32:64])
+s := new(big.Int).SetBytes(input[64:96])
+x := new(big.Int).SetBytes(input[96:128])
+y := new(big.Int).SetBytes(input[128:160])
+
+curve := elliptic.P256()
+// Reject the point at infinity and any point not on the curve.
+if x.Sign() == 0 && y.Sign() == 0 {
+return nil, nil
+}
+if !curve.IsOnCurve(x, y) {
+return nil, nil
+}
+// r and s must be in [1, N-1].
+n := curve.Params().N
+if r.Sign() <= 0 || s.Sign() <= 0 || r.Cmp(n) >= 0 || s.Cmp(n) >= 0 {
+return nil, nil
+}
+pub := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
+if !ecdsa.Verify(pub, hash, r, s) {
+return nil, nil
+}
+out := make([]byte, 32)
+out[31] = 1
+return out, nil
 }

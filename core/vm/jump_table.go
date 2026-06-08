@@ -73,6 +73,7 @@ func newPragueForkInstructionSet() JumpTable {
 	enable7516(&instructionSet) // BLOBBASEFEE          cancun
 	enable5656(&instructionSet) // MCOPY                cancun
 	enable1153(&instructionSet) // TLOAD, TSTORE        cancun
+	enable7939(&instructionSet) // CLZ                  osaka
 
 	instructionSet[PREVRANDAO] = operation{ // merge
 		execute:     opRandom,

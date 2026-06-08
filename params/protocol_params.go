@@ -111,7 +111,10 @@ const (
 	CreateBySelfdestructGas uint64 = 25000
 
 	MaxCodeSize     = 24576           // Maximum bytecode to permit for a contract
-	MaxInitCodeSize = 2 * MaxCodeSize // Maximum initcode to permit in CREATE/CREATE2 (EIP-3860)
+	// EIP-7907 (Osaka): raise the contract code size limit to 256 KiB once the
+	// Prague-fork rules are active. Pre-Osaka the limit stays at MaxCodeSize.
+	MaxCodeSizeOsaka = 256 * 1024
+	MaxInitCodeSize  = 2 * MaxCodeSize // Maximum initcode to permit in CREATE/CREATE2 (EIP-3860)
 	InitCodeWordGas = 2               // Once per word of the init code when creating a contract (EIP-3860)
 
 	// Precompiled contract gas prices
