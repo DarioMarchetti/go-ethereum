@@ -923,7 +923,7 @@ func opSuicide(pc *uint64, interpreter *EVMInterpreter, callContext *callCtx) ([
 	balance := interpreter.evm.StateDB.GetBalance(callContext.contract.Address())
 	interpreter.evm.StateDB.AddBalance(common.BigToAddress(callContext.stack.pop()), balance)
 
-	if interpreter.evm.chainRules.IsPragueFork {
+	if interpreter.evm.chainRules.IsPragueFork || interpreter.evm.chainRules.IsOsaka {
 		// EIP-6780: only delete the account if it was created in this transaction.
 		interpreter.evm.StateDB.Selfdestruct6780(callContext.contract.Address())
 	} else {

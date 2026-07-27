@@ -57,6 +57,9 @@ func run(evm *EVM, contract *Contract, input []byte, readOnly bool) ([]byte, err
 		if evm.chainRules.IsPragueFork {
 			precompiles = PrecompiledContractsPragueFork
 		}
+		if evm.chainRules.IsOsaka {
+			precompiles = PrecompiledContractsOsaka
+		}
 		if p := precompiles[*contract.CodeAddr]; p != nil {
 			return RunPrecompiledContract(p, input, contract)
 		}
@@ -223,6 +226,9 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		}
 		if evm.chainRules.IsPragueFork {
 			precompiles = PrecompiledContractsPragueFork
+		}
+		if evm.chainRules.IsOsaka {
+			precompiles = PrecompiledContractsOsaka
 		}
 		if precompiles[addr] == nil && evm.chainRules.IsEIP158 && value.Sign() == 0 {
 			// Calling a non existing account, don't do anything, but ping the tracer
@@ -408,7 +414,7 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 		return nil, common.Address{}, 0, ErrContractAddressCollision
 	}
 	// EIP-3860: limit initcode size after Prague fork
-	if evm.chainRules.IsPragueFork && len(codeAndHash.code) > params.MaxInitCodeSize {
+	if (evm.chainRules.IsPragueFork || evm.chainRules.IsOsaka) && len(codeAndHash.code) > params.MaxInitCodeSize {
 		return nil, common.Address{}, gas, ErrMaxInitCodeSizeExceeded
 	}
 	// Create a new account on the state
@@ -436,15 +442,14 @@ func (evm *EVM) create(caller ContractRef, codeAndHash *codeAndHash, gas uint64,
 	ret, err := run(evm, contract, nil, false)
 
 	// EIP-3541: reject deployed code starting with the 0xEF byte (Prague rule).
-	if err == nil && evm.chainRules.IsPragueFork && len(ret) >= 1 && ret[0] == 0xEF {
+	if err == nil && (evm.chainRules.IsPragueFork || evm.chainRules.IsOsaka) && len(ret) >= 1 && ret[0] == 0xEF {
 		err = ErrInvalidCode
 	}
 
 	// check whether the max code size has been exceeded
-	// EIP-7907 (Osaka): raise the deployed code size limit when Prague-fork
-	// rules are active.
+	// EIP-7907 (Osaka): raise the deployed code size limit when Osaka rules are active.
 	maxCodeSize := params.MaxCodeSize
-	if evm.chainRules.IsPragueFork {
+	if evm.chainRules.IsOsaka {
 		maxCodeSize = params.MaxCodeSizeOsaka
 	}
 	maxCodeSizeExceeded := evm.chainRules.IsEIP158 && len(ret) > maxCodeSize

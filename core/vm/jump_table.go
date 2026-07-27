@@ -59,6 +59,7 @@ var (
 	istanbulInstructionSet         = newIstanbulInstructionSet()
 	yoloV1InstructionSet           = newYoloV1InstructionSet()
 	pragueForkInstructionSet       = newPragueForkInstructionSet()
+	osakaInstructionSet            = newOsakaInstructionSet()
 )
 
 // JumpTable contains the EVM opcodes supported at a given fork.
@@ -73,7 +74,6 @@ func newPragueForkInstructionSet() JumpTable {
 	enable7516(&instructionSet) // BLOBBASEFEE          cancun
 	enable5656(&instructionSet) // MCOPY                cancun
 	enable1153(&instructionSet) // TLOAD, TSTORE        cancun
-	enable7939(&instructionSet) // CLZ                  osaka
 
 	instructionSet[PREVRANDAO] = operation{ // merge
 		execute:     opRandom,
@@ -85,6 +85,17 @@ func newPragueForkInstructionSet() JumpTable {
 
 	return instructionSet
 
+}
+
+// newOsakaInstructionSet builds on the Prague baseline and layers the Osaka
+// opcode additions on top. It is self-contained so a chain can activate Osaka
+// without first activating Prague.
+func newOsakaInstructionSet() JumpTable {
+	instructionSet := newPragueForkInstructionSet()
+
+	enable7939(&instructionSet) // CLZ                  osaka
+
+	return instructionSet
 }
 
 func newYoloV1InstructionSet() JumpTable {
