@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -30,6 +31,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/blake2b"
 	"github.com/ethereum/go-ethereum/crypto/bls12381"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/params"
 
 	//lint:ignore SA1019 Needed for precompile
@@ -127,7 +129,7 @@ var PrecompiledContractsPragueFork = map[common.Address]PrecompiledContract{
 // PrecompiledContractsOsaka builds on the Prague baseline and adds the Osaka
 // precompile changes (EIP-7883 ModExp repricing at 0x05 and EIP-7951 P256VERIFY
 // at 0x0100). It is self-contained so Osaka can be activated without Prague.
-var PrecompiledContractsOsaka = map[common.Address]PrecompiledContract{
+var PrecompiledContractsOsakaOld = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{1}):  &ecrecover{},
 	common.BytesToAddress([]byte{2}):  &sha256hash{},
 	common.BytesToAddress([]byte{3}):  &ripemd160hash{},
@@ -146,6 +148,33 @@ var PrecompiledContractsOsaka = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{16}): &bls12381Pairing{},
 	common.BytesToAddress([]byte{17}): &bls12381MapG1{},
 	common.BytesToAddress([]byte{18}): &bls12381MapG2{},
+	// EIP-7951 — P256VERIFY at address 0x0000…0100 (Osaka)
+	common.BytesToAddress([]byte{1, 0}): &p256Verify{},
+}
+
+// PrecompiledContractsOsaka builds on the Prague baseline and adds the Osaka
+// precompile changes (EIP-7883 ModExp repricing at 0x05, EIP-4844 point
+// evaluation at 0x0a, and EIP-7951 P256VERIFY at 0x0100). It is self-contained
+// so Osaka can be activated without Prague. Address layout matches upstream
+// go-ethereum v1.16.7.
+var PrecompiledContractsOsaka = map[common.Address]PrecompiledContract{
+	common.BytesToAddress([]byte{1}):  &ecrecover{},
+	common.BytesToAddress([]byte{2}):  &sha256hash{},
+	common.BytesToAddress([]byte{3}):  &ripemd160hash{},
+	common.BytesToAddress([]byte{4}):  &dataCopy{},
+	common.BytesToAddress([]byte{5}):  &bigModExpOsaka{}, // EIP-7883 repricing
+	common.BytesToAddress([]byte{6}):  &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{7}):  &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{8}):  &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{9}):  &blake2F{},
+	common.BytesToAddress([]byte{10}): &kzgPointEvaluation{}, // EIP-4844
+	common.BytesToAddress([]byte{11}): &bls12381G1Add{},
+	common.BytesToAddress([]byte{12}): &bls12381G1MultiExp{},
+	common.BytesToAddress([]byte{13}): &bls12381G2Add{},
+	common.BytesToAddress([]byte{14}): &bls12381G2MultiExp{},
+	common.BytesToAddress([]byte{15}): &bls12381Pairing{},
+	common.BytesToAddress([]byte{16}): &bls12381MapG1{},
+	common.BytesToAddress([]byte{17}): &bls12381MapG2{},
 	// EIP-7951 — P256VERIFY at address 0x0000…0100 (Osaka)
 	common.BytesToAddress([]byte{1, 0}): &p256Verify{},
 }
@@ -1003,87 +1032,87 @@ func (c *bls12381MapG2) Run(input []byte) ([]byte, error) {
 // applied at the Osaka fork. Behaviour (Run) is identical to bigModExp; only
 // the gas formula changes:
 //
-//   words           = ceil(max(baseLen, modLen) / 8)
-//   multComplexity  = 16                         if max(baseLen, modLen) <= 32
-//                     2 * words * words          otherwise
-//   gas             = max(500, multComplexity * max(adjExpLen, 1) / 3)
+//	words           = ceil(max(baseLen, modLen) / 8)
+//	multComplexity  = 16                         if max(baseLen, modLen) <= 32
+//	                  2 * words * words          otherwise
+//	gas             = max(500, multComplexity * max(adjExpLen, 1) / 3)
 type bigModExpOsaka struct{}
 
 var (
-osakaBig500 = big.NewInt(500)
-osakaBig3   = big.NewInt(3)
+	osakaBig500 = big.NewInt(500)
+	osakaBig3   = big.NewInt(3)
 )
 
 // RequiredGas returns the EIP-7883 priced gas for the ModExp precompile.
 func (c *bigModExpOsaka) RequiredGas(input []byte) uint64 {
-var (
-baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
-expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
-modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
-)
-if len(input) > 96 {
-input = input[96:]
-} else {
-input = input[:0]
-}
-var expHead *big.Int
-if big.NewInt(int64(len(input))).Cmp(baseLen) <= 0 {
-expHead = new(big.Int)
-} else {
-if expLen.Cmp(big32) > 0 {
-expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), 32))
-} else {
-expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), expLen.Uint64()))
-}
-}
-var msb int
-if bitlen := expHead.BitLen(); bitlen > 0 {
-msb = bitlen - 1
-}
-adjExpLen := new(big.Int)
-if expLen.Cmp(big32) > 0 {
-adjExpLen.Sub(expLen, big32)
-adjExpLen.Mul(big8, adjExpLen)
-}
-adjExpLen.Add(adjExpLen, big.NewInt(int64(msb)))
+	var (
+		baseLen = new(big.Int).SetBytes(getData(input, 0, 32))
+		expLen  = new(big.Int).SetBytes(getData(input, 32, 32))
+		modLen  = new(big.Int).SetBytes(getData(input, 64, 32))
+	)
+	if len(input) > 96 {
+		input = input[96:]
+	} else {
+		input = input[:0]
+	}
+	var expHead *big.Int
+	if big.NewInt(int64(len(input))).Cmp(baseLen) <= 0 {
+		expHead = new(big.Int)
+	} else {
+		if expLen.Cmp(big32) > 0 {
+			expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), 32))
+		} else {
+			expHead = new(big.Int).SetBytes(getData(input, baseLen.Uint64(), expLen.Uint64()))
+		}
+	}
+	var msb int
+	if bitlen := expHead.BitLen(); bitlen > 0 {
+		msb = bitlen - 1
+	}
+	adjExpLen := new(big.Int)
+	if expLen.Cmp(big32) > 0 {
+		adjExpLen.Sub(expLen, big32)
+		adjExpLen.Mul(big8, adjExpLen)
+	}
+	adjExpLen.Add(adjExpLen, big.NewInt(int64(msb)))
 
-maxLen := math.BigMax(modLen, baseLen)
-var multComplexity *big.Int
-if maxLen.Cmp(big32) <= 0 {
-multComplexity = big.NewInt(16)
-} else {
-// words = ceil(maxLen / 8)
-words := new(big.Int).Add(maxLen, big.NewInt(7))
-words.Div(words, big8)
-multComplexity = new(big.Int).Mul(words, words)
-multComplexity.Mul(multComplexity, big.NewInt(2))
-}
+	maxLen := math.BigMax(modLen, baseLen)
+	var multComplexity *big.Int
+	if maxLen.Cmp(big32) <= 0 {
+		multComplexity = big.NewInt(16)
+	} else {
+		// words = ceil(maxLen / 8)
+		words := new(big.Int).Add(maxLen, big.NewInt(7))
+		words.Div(words, big8)
+		multComplexity = new(big.Int).Mul(words, words)
+		multComplexity.Mul(multComplexity, big.NewInt(2))
+	}
 
-gas := new(big.Int).Mul(multComplexity, math.BigMax(adjExpLen, big1))
-gas.Div(gas, osakaBig3)
-if gas.Cmp(osakaBig500) < 0 {
-gas.Set(osakaBig500)
-}
-if gas.BitLen() > 64 {
-return math.MaxUint64
-}
-return gas.Uint64()
+	gas := new(big.Int).Mul(multComplexity, math.BigMax(adjExpLen, big1))
+	gas.Div(gas, osakaBig3)
+	if gas.Cmp(osakaBig500) < 0 {
+		gas.Set(osakaBig500)
+	}
+	if gas.BitLen() > 64 {
+		return math.MaxUint64
+	}
+	return gas.Uint64()
 }
 
 // Run delegates to the standard bigModExp implementation; the algorithm did
 // not change, only the gas pricing did.
 func (c *bigModExpOsaka) Run(input []byte) ([]byte, error) {
-return (&bigModExp{}).Run(input)
+	return (&bigModExp{}).Run(input)
 }
 
 // p256Verify implements EIP-7951 — secp256r1 (P-256) signature verification
 // precompile at address 0x0000…0100. Activated at the Osaka fork.
 //
-//   input  = msgHash(32) || r(32) || s(32) || qX(32) || qY(32)        // 160 bytes
-//   output = 32-byte big-endian "1"  on valid signature
-//            empty                  on any failure (malformed input,
-//                                   bad point, invalid signature)
-//   gas    = 6900  (constant, per EIP-7951)
+//	input  = msgHash(32) || r(32) || s(32) || qX(32) || qY(32)        // 160 bytes
+//	output = 32-byte big-endian "1"  on valid signature
+//	         empty                  on any failure (malformed input,
+//	                                bad point, invalid signature)
+//	gas    = 6900  (constant, per EIP-7951)
 type p256Verify struct{}
 
 const p256VerifyGas uint64 = 6900
@@ -1091,33 +1120,97 @@ const p256VerifyGas uint64 = 6900
 func (c *p256Verify) RequiredGas(_ []byte) uint64 { return p256VerifyGas }
 
 func (c *p256Verify) Run(input []byte) ([]byte, error) {
-if len(input) != 160 {
-return nil, nil
-}
-hash := input[0:32]
-r := new(big.Int).SetBytes(input[32:64])
-s := new(big.Int).SetBytes(input[64:96])
-x := new(big.Int).SetBytes(input[96:128])
-y := new(big.Int).SetBytes(input[128:160])
+	if len(input) != 160 {
+		return nil, nil
+	}
+	hash := input[0:32]
+	r := new(big.Int).SetBytes(input[32:64])
+	s := new(big.Int).SetBytes(input[64:96])
+	x := new(big.Int).SetBytes(input[96:128])
+	y := new(big.Int).SetBytes(input[128:160])
 
-curve := elliptic.P256()
-// Reject the point at infinity and any point not on the curve.
-if x.Sign() == 0 && y.Sign() == 0 {
-return nil, nil
+	curve := elliptic.P256()
+	// Reject the point at infinity and any point not on the curve.
+	if x.Sign() == 0 && y.Sign() == 0 {
+		return nil, nil
+	}
+	if !curve.IsOnCurve(x, y) {
+		return nil, nil
+	}
+	// r and s must be in [1, N-1].
+	n := curve.Params().N
+	if r.Sign() <= 0 || s.Sign() <= 0 || r.Cmp(n) >= 0 || s.Cmp(n) >= 0 {
+		return nil, nil
+	}
+	pub := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
+	if !ecdsa.Verify(pub, hash, r, s) {
+		return nil, nil
+	}
+	out := make([]byte, 32)
+	out[31] = 1
+	return out, nil
 }
-if !curve.IsOnCurve(x, y) {
-return nil, nil
+
+// kzgPointEvaluation implements the EIP-4844 point evaluation precompile.
+type kzgPointEvaluation struct{}
+
+// RequiredGas estimates the gas required for running the point evaluation precompile.
+func (b *kzgPointEvaluation) RequiredGas(input []byte) uint64 {
+	return params.BlobTxPointEvaluationPrecompileGas
 }
-// r and s must be in [1, N-1].
-n := curve.Params().N
-if r.Sign() <= 0 || s.Sign() <= 0 || r.Cmp(n) >= 0 || s.Cmp(n) >= 0 {
-return nil, nil
+
+const (
+	blobVerifyInputLength           = 192  // Max input length for the point evaluation precompile.
+	blobCommitmentVersionKZG  uint8 = 0x01 // Version byte for the point evaluation precompile.
+	blobPrecompileReturnValue       = "000000000000000000000000000000000000000000000000000000000000100073eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"
+)
+
+var (
+	errBlobVerifyInvalidInputLength = errors.New("invalid input length")
+	errBlobVerifyMismatchedVersion  = errors.New("mismatched versioned hash")
+	errBlobVerifyKZGProof           = errors.New("error verifying kzg proof")
+)
+
+// Run executes the point evaluation precompile.
+func (b *kzgPointEvaluation) Run(input []byte) ([]byte, error) {
+	if len(input) != blobVerifyInputLength {
+		return nil, errBlobVerifyInvalidInputLength
+	}
+	// versioned hash: first 32 bytes
+	var versionedHash common.Hash
+	copy(versionedHash[:], input[:])
+
+	var (
+		point kzg4844.Point
+		claim kzg4844.Claim
+	)
+	// Evaluation point: next 32 bytes
+	copy(point[:], input[32:])
+	// Expected output: next 32 bytes
+	copy(claim[:], input[64:])
+
+	// input kzg point: next 48 bytes
+	var commitment kzg4844.Commitment
+	copy(commitment[:], input[96:])
+	if kZGToVersionedHash(commitment) != versionedHash {
+		return nil, errBlobVerifyMismatchedVersion
+	}
+
+	// Proof: next 48 bytes
+	var proof kzg4844.Proof
+	copy(proof[:], input[144:])
+
+	if err := kzg4844.VerifyProof(commitment, point, claim, proof); err != nil {
+		return nil, fmt.Errorf("%w: %v", errBlobVerifyKZGProof, err)
+	}
+
+	return common.Hex2Bytes(blobPrecompileReturnValue), nil
 }
-pub := &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
-if !ecdsa.Verify(pub, hash, r, s) {
-return nil, nil
-}
-out := make([]byte, 32)
-out[31] = 1
-return out, nil
+
+// kZGToVersionedHash implements kzg_to_versioned_hash from EIP-4844
+func kZGToVersionedHash(kzg kzg4844.Commitment) common.Hash {
+	h := sha256.Sum256(kzg[:])
+	h[0] = blobCommitmentVersionKZG
+
+	return h
 }
