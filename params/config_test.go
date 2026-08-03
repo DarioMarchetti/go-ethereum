@@ -70,6 +70,17 @@ func TestCheckCompatible(t *testing.T) {
 				RewindTo:     9,
 			},
 		},
+		{
+			stored: &ChainConfig{PQCForkBlock: big.NewInt(10)},
+			new:    &ChainConfig{PQCForkBlock: big.NewInt(20)},
+			head:   10,
+			wantErr: &ConfigCompatError{
+				What:         "PQC fork block",
+				StoredConfig: big.NewInt(10),
+				NewConfig:    big.NewInt(20),
+				RewindTo:     9,
+			},
+		},
 	}
 
 	for _, test := range tests {

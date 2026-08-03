@@ -60,6 +60,11 @@ func run(evm *EVM, contract *Contract, input []byte, readOnly bool) ([]byte, err
 		if evm.chainRules.IsOsaka {
 			precompiles = PrecompiledContractsOsaka
 		}
+		if evm.chainRules.IsPQC {
+			if p := precompiledContractsPQC[*contract.CodeAddr]; p != nil {
+				return RunPrecompiledContract(p, input, contract)
+			}
+		}
 		if p := precompiles[*contract.CodeAddr]; p != nil {
 			return RunPrecompiledContract(p, input, contract)
 		}
@@ -230,7 +235,8 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 		if evm.chainRules.IsOsaka {
 			precompiles = PrecompiledContractsOsaka
 		}
-		if precompiles[addr] == nil && evm.chainRules.IsEIP158 && value.Sign() == 0 {
+		pqcPrecompile := evm.chainRules.IsPQC && precompiledContractsPQC[addr] != nil
+		if precompiles[addr] == nil && !pqcPrecompile && evm.chainRules.IsEIP158 && value.Sign() == 0 {
 			// Calling a non existing account, don't do anything, but ping the tracer
 			if evm.vmConfig.Debug && evm.depth == 0 {
 				evm.vmConfig.Tracer.CaptureStart(caller.Address(), addr, false, input, gas, value)

@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto/bls12381"
 	"github.com/ethereum/go-ethereum/crypto/bn256"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/crypto/mldsa44"
 	"github.com/ethereum/go-ethereum/params"
 
 	//lint:ignore SA1019 Needed for precompile
@@ -177,6 +178,14 @@ var PrecompiledContractsOsaka = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{17}): &bls12381MapG2{},
 	// EIP-7951 — P256VERIFY at address 0x0000…0100 (Osaka)
 	common.BytesToAddress([]byte{1, 0}): &p256Verify{},
+}
+
+// precompiledContractsPQC is an overlay applied independently of the Ethereum
+// fork baseline selected above. This keeps the PQC fork from enabling unrelated
+// Prague or Osaka changes on older networks.
+var precompiledContractsPQC = map[common.Address]PrecompiledContract{
+	common.BytesToAddress([]byte{0x12}): &mldsaVerify{},
+	common.BytesToAddress([]byte{0x13}): &mldsaVerify{eth: true},
 }
 
 // RunPrecompiledContract runs and evaluates the output of a precompiled contract.
@@ -1213,4 +1222,34 @@ func kZGToVersionedHash(kzg kzg4844.Commitment) common.Hash {
 	h[0] = blobCommitmentVersionKZG
 
 	return h
+}
+
+// mldsaVerify implements the EIP-8051 ML-DSA-44 precompiles at 0x12 and
+// 0x13. The latter selects the EVM-optimized Keccak-PRNG variant.
+type mldsaVerify struct {
+	eth bool
+}
+
+const mldsaVerifyInputSize = 32 + mldsa44.SignatureSize + mldsa44.ExpandedPublicKeySize
+
+func (c *mldsaVerify) RequiredGas(_ []byte) uint64 { return params.MLDSAVerifyGas }
+
+func (c *mldsaVerify) Run(input []byte) ([]byte, error) {
+	output := make([]byte, 32)
+	if len(input) != mldsaVerifyInputSize {
+		return output, nil
+	}
+	message := input[:32]
+	signature := input[32 : 32+mldsa44.SignatureSize]
+	publicKey := input[32+mldsa44.SignatureSize:]
+	var valid bool
+	if c.eth {
+		valid = mldsa44.VerifyExpandedETH(publicKey, message, signature)
+	} else {
+		valid = mldsa44.VerifyExpanded(publicKey, message, signature)
+	}
+	if valid {
+		output[31] = 1
+	}
+	return output, nil
 }

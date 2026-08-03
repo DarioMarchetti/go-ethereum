@@ -240,16 +240,16 @@ var (
 	//
 	// This configuration is intentionally not using keyed fields to force anyone
 	// adding flags to the config to also have to set these fields.
-	AllEthashProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, new(EthashConfig), nil}
+	AllEthashProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, new(EthashConfig), nil}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Clique consensus.
 	//
 	// This configuration is intentionally not using keyed fields to force anyone
 	// adding flags to the config to also have to set these fields.
-	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, &CliqueConfig{Period: 0, Epoch: 30000}}
+	AllCliqueProtocolChanges = &ChainConfig{big.NewInt(1337), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, nil, &CliqueConfig{Period: 0, Epoch: 30000}}
 
-	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, new(EthashConfig), nil}
+	TestChainConfig = &ChainConfig{big.NewInt(1), big.NewInt(0), nil, false, big.NewInt(0), common.Hash{}, big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), big.NewInt(0), nil, nil, nil, nil, nil, new(EthashConfig), nil}
 	TestRules       = TestChainConfig.Rules(new(big.Int))
 )
 
@@ -325,6 +325,7 @@ type ChainConfig struct {
 	EWASMBlock      *big.Int `json:"ewasmBlock,omitempty"`      // EWASM switch block (nil = no fork, 0 = already activated)
 	PragueForkBlock *big.Int `json:"pragueForkBlock,omitempty"` // Prague switch block (nil = no fork, 0 = already on prague)
 	OsakaForkBlock  *big.Int `json:"osakaForkBlock,omitempty"`  // Osaka switch block (nil = no fork, 0 = already on osaka). Self-contained: activating Osaka enables the Prague baseline plus the Osaka EIPs, so Prague may be skipped.
+	PQCForkBlock    *big.Int `json:"pqcForkBlock,omitempty"`    // PQC precompile switch block (nil = no fork, 0 = already activated)
 
 	// Various consensus engines
 	Ethash *EthashConfig `json:"ethash,omitempty"`
@@ -361,7 +362,7 @@ func (c *ChainConfig) String() string {
 	default:
 		engine = "unknown"
 	}
-	return fmt.Sprintf("{ChainID: %v Homestead: %v DAO: %v DAOSupport: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, YOLO v1: %v, Engine: %v}",
+	return fmt.Sprintf("{ChainID: %v Homestead: %v DAO: %v DAOSupport: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, YOLO v1: %v, PQC: %v, Engine: %v}",
 		c.ChainID,
 		c.HomesteadBlock,
 		c.DAOForkBlock,
@@ -375,6 +376,7 @@ func (c *ChainConfig) String() string {
 		c.IstanbulBlock,
 		c.MuirGlacierBlock,
 		c.YoloV1Block,
+		c.PQCForkBlock,
 		engine,
 	)
 }
@@ -445,6 +447,11 @@ func (c *ChainConfig) IsPragueFork(num *big.Int) bool {
 // so a chain can activate Osaka directly without ever activating Prague.
 func (c *ChainConfig) IsOsaka(num *big.Int) bool {
 	return isForked(c.OsakaForkBlock, num)
+}
+
+// IsPQC returns whether the PQC precompile fork is active at num.
+func (c *ChainConfig) IsPQC(num *big.Int) bool {
+	return isForked(c.PQCForkBlock, num)
 }
 
 // IsEWASM returns whether num represents a block number after the EWASM fork
@@ -556,6 +563,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, head *big.Int) *Confi
 	if isForkIncompatible(c.EWASMBlock, newcfg.EWASMBlock, head) {
 		return newCompatError("ewasm fork block", c.EWASMBlock, newcfg.EWASMBlock)
 	}
+	if isForkIncompatible(c.PQCForkBlock, newcfg.PQCForkBlock, head) {
+		return newCompatError("PQC fork block", c.PQCForkBlock, newcfg.PQCForkBlock)
+	}
 	return nil
 }
 
@@ -626,6 +636,7 @@ type Rules struct {
 	IsYoloV1                                                bool
 	IsPragueFork                                            bool
 	IsOsaka                                                 bool
+	IsPQC                                                   bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -647,5 +658,6 @@ func (c *ChainConfig) Rules(num *big.Int) Rules {
 		IsYoloV1:         c.IsYoloV1(num),
 		IsPragueFork:     c.IsPragueFork(num),
 		IsOsaka:          c.IsOsaka(num),
+		IsPQC:            c.IsPQC(num),
 	}
 }
